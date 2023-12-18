@@ -25,6 +25,7 @@ import (
 
 	"github.com/onsi/gomega/gbytes"
 	"github.com/vmware/govmomi/simulator"
+	_ "github.com/vmware/govmomi/vapi/cluster/simulator" // import this to register cluster module service test endpoint
 )
 
 type Builder struct {
@@ -78,7 +79,7 @@ func (b *Builder) Build() (*Simulator, error) {
 func govcCommand(govcURL, commandStr string, buffers ...*gbytes.Buffer) *exec.Cmd {
 	govcBinPath := os.Getenv("GOVC_BIN_PATH")
 	args := strings.Split(commandStr, " ")
-	cmd := exec.Command(govcBinPath, args...)
+	cmd := exec.Command(govcBinPath, args...) //nolint:gosec // Non-production code
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, fmt.Sprintf("GOVC_URL=%s", govcURL), "GOVC_INSECURE=true")
 

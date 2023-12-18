@@ -14,9 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package vmware contains context objects for testing.
 package vmware
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	vmoprv1 "github.com/vmware-tanzu/vm-operator/api/v1alpha1"
@@ -25,7 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	vmwarev1 "sigs.k8s.io/cluster-api-provider-vsphere/apis/vmware/v1beta1"
-	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
+	capvcontext "sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context/fake"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context/vmware"
 )
@@ -39,34 +42,37 @@ type UnitTestContextForController struct {
 	// Key may be used to lookup Ctx.Cluster with Ctx.Client.Get.
 	Key client.ObjectKey
 
-	VirtualMachineImage *vmoprv1.VirtualMachineImage
+	VirtualMachineImage      *vmoprv1.VirtualMachineImage
+	ControllerManagerContext *capvcontext.ControllerManagerContext
 }
 
 // NewUnitTestContextForController returns a new UnitTestContextForController
 // with an optional prototype cluster for unit testing controllers that do not
 // invoke the VSphereCluster spec controller.
-func NewUnitTestContextForController( /*newReconcilerFn NewReconcilerFunc, */ namespace string, vSphereCluster *vmwarev1.VSphereCluster,
+func NewUnitTestContextForController(ctx context.Context, namespace string, vSphereCluster *vmwarev1.VSphereCluster,
 	prototypeCluster bool, initObjects, gcInitObjects []client.Object) *UnitTestContextForController {
-	ctx := &UnitTestContextForController{
-		GuestClusterContext: fake.NewGuestClusterContext(fake.NewVmwareClusterContext(
-			fake.NewControllerContext(
-				fake.NewControllerManagerContext(initObjects...)), namespace, vSphereCluster), prototypeCluster, gcInitObjects...),
+	controllerManagerCtx := fake.NewControllerManagerContext(initObjects...)
+
+	unitTestCtx := &UnitTestContextForController{
+		GuestClusterContext: fake.NewGuestClusterContext(ctx, fake.NewVmwareClusterContext(ctx, controllerManagerCtx, namespace, vSphereCluster),
+			controllerManagerCtx, prototypeCluster, gcInitObjects...),
+		ControllerManagerContext: controllerManagerCtx,
 	}
-	ctx.Key = client.ObjectKey{Namespace: ctx.VSphereCluster.Namespace, Name: ctx.VSphereCluster.Name}
+	unitTestCtx.Key = client.ObjectKey{Namespace: unitTestCtx.VSphereCluster.Namespace, Name: unitTestCtx.VSphereCluster.Name}
 
-	CreatePrototypePrereqs(ctx, ctx.ControllerManagerContext)
+	CreatePrototypePrereqs(ctx, controllerManagerCtx.Client)
 
-	return ctx
+	return unitTestCtx
 }
 
-func CreatePrototypePrereqs(_ *UnitTestContextForController, ctx *context.ControllerManagerContext) {
+func CreatePrototypePrereqs(ctx context.Context, c client.Client) {
 	By("Creating a prototype VirtualMachineClass", func() {
 		virtualMachineClass := FakeVirtualMachineClass()
 		virtualMachineClass.Name = "small"
-		Expect(ctx.Client.Create(ctx, virtualMachineClass)).To(Succeed())
+		Expect(c.Create(ctx, virtualMachineClass)).To(Succeed())
 		virtualMachineClassKey := client.ObjectKey{Name: virtualMachineClass.Name}
 		Eventually(func() error {
-			return ctx.Client.Get(ctx, virtualMachineClassKey, virtualMachineClass)
+			return c.Get(ctx, virtualMachineClassKey, virtualMachineClass)
 		}).Should(Succeed())
 	})
 }

@@ -14,15 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-//nolint:wrapcheck
+// Package helpers contains helpers for creating a test environment.
 package helpers
 
 import (
-	goctx "context"
+	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/vmware/govmomi/simulator"
@@ -44,11 +46,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	ctrlmgr "sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	infrav1alpha3 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1alpha3"
-	infrav1alpha4 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1alpha4"
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1beta1"
-	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
+	"sigs.k8s.io/cluster-api-provider-vsphere/internal/webhooks"
+	capvcontext "sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/manager"
 	"sigs.k8s.io/cluster-api-provider-vsphere/test/helpers/vcsim"
 )
@@ -70,12 +73,13 @@ func init() {
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(admissionv1.AddToScheme(scheme))
 	utilruntime.Must(clusterv1.AddToScheme(scheme))
-	utilruntime.Must(infrav1alpha3.AddToScheme(scheme))
-	utilruntime.Must(infrav1alpha4.AddToScheme(scheme))
 	utilruntime.Must(infrav1.AddToScheme(scheme))
 
 	// Get the root of the current file to use in CRD paths.
-	_, filename, _, _ := goruntime.Caller(0) //nolint
+	_, filename, _, ok := goruntime.Caller(0)
+	if !ok {
+		klog.Fatalf("Failed to get information for current file from runtime")
+	}
 	root := path.Join(path.Dir(filename), "..", "..")
 
 	crdPaths := []string{
@@ -103,12 +107,12 @@ type (
 		Config    *rest.Config
 		Simulator *vcsim.Simulator
 
-		cancel goctx.CancelFunc
+		cancel context.CancelFunc
 	}
 )
 
 // NewTestEnvironment creates a new environment spinning up a local api-server.
-func NewTestEnvironment() *TestEnvironment {
+func NewTestEnvironment(ctx context.Context) *TestEnvironment {
 	// initialize webhook here to be able to test the envtest install via webhookOptions
 	initializeWebhookInEnvironment()
 
@@ -125,39 +129,60 @@ func NewTestEnvironment() *TestEnvironment {
 	if err != nil {
 		klog.Fatalf("unable to start vc simulator %s", err)
 	}
+	// Localhost is used on MacOS to avoid Firewall warning popups.
+	host := "localhost"
+	if strings.EqualFold(os.Getenv("USE_EXISTING_CLUSTER"), "true") {
+		// 0.0.0.0 is required on Linux when using kind because otherwise the kube-apiserver running in kind
+		// is unable to reach the webhook, because the webhook would be only listening on 127.0.0.1.
+		// Somehow that's not an issue on MacOS.
+		if goruntime.GOOS == "linux" {
+			host = "0.0.0.0"
+		}
+	}
 
 	managerOpts := manager.Options{
 		Options: ctrl.Options{
-			Scheme:             scheme,
-			Port:               env.WebhookInstallOptions.LocalServingPort,
-			CertDir:            env.WebhookInstallOptions.LocalServingCertDir,
-			MetricsBindAddress: "0",
+			Scheme: scheme,
+			Metrics: metricsserver.Options{
+				BindAddress: "0",
+			},
+			WebhookServer: webhook.NewServer(
+				webhook.Options{
+					Port:    env.WebhookInstallOptions.LocalServingPort,
+					CertDir: env.WebhookInstallOptions.LocalServingCertDir,
+					Host:    host,
+				},
+			),
 		},
 		KubeConfig: env.Config,
 		Username:   simr.Username(),
 		Password:   simr.Password(),
 	}
-	managerOpts.AddToManager = func(ctx *context.ControllerManagerContext, mgr ctrlmgr.Manager) error {
-		if err := (&infrav1.VSphereMachine{}).SetupWebhookWithManager(mgr); err != nil {
+	managerOpts.AddToManager = func(ctx context.Context, controllerCtx *capvcontext.ControllerManagerContext, mgr ctrlmgr.Manager) error {
+		if err := (&webhooks.VSphereClusterTemplateWebhook{}).SetupWebhookWithManager(mgr); err != nil {
 			return err
 		}
 
-		if err := (&infrav1.VSphereMachineTemplateWebhook{}).SetupWebhookWithManager(mgr); err != nil {
+		if err := (&webhooks.VSphereMachineWebhook{}).SetupWebhookWithManager(mgr); err != nil {
 			return err
 		}
 
-		if err := (&infrav1.VSphereVM{}).SetupWebhookWithManager(mgr); err != nil {
+		if err := (&webhooks.VSphereMachineTemplateWebhook{}).SetupWebhookWithManager(mgr); err != nil {
 			return err
 		}
 
-		if err := (&infrav1.VSphereDeploymentZone{}).SetupWebhookWithManager(mgr); err != nil {
+		if err := (&webhooks.VSphereVMWebhook{}).SetupWebhookWithManager(mgr); err != nil {
 			return err
 		}
 
-		return (&infrav1.VSphereFailureDomain{}).SetupWebhookWithManager(mgr)
+		if err := (&webhooks.VSphereDeploymentZoneWebhook{}).SetupWebhookWithManager(mgr); err != nil {
+			return err
+		}
+
+		return (&webhooks.VSphereFailureDomainWebhook{}).SetupWebhookWithManager(mgr)
 	}
 
-	mgr, err := manager.New(managerOpts)
+	mgr, err := manager.New(ctx, managerOpts)
 	if err != nil {
 		klog.Fatalf("failed to create the CAPV controller manager: %v", err)
 	}
@@ -170,8 +195,8 @@ func NewTestEnvironment() *TestEnvironment {
 	}
 }
 
-func (t *TestEnvironment) StartManager(ctx goctx.Context) error {
-	ctx, cancel := goctx.WithCancel(ctx)
+func (t *TestEnvironment) StartManager(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
 	t.cancel = cancel
 	return t.Manager.Start(ctx)
 }
@@ -182,7 +207,7 @@ func (t *TestEnvironment) Stop() error {
 	return env.Stop()
 }
 
-func (t *TestEnvironment) Cleanup(ctx goctx.Context, objs ...client.Object) error {
+func (t *TestEnvironment) Cleanup(ctx context.Context, objs ...client.Object) error {
 	errs := make([]error, 0, len(objs))
 	for _, o := range objs {
 		err := t.Client.Delete(ctx, o)
@@ -197,7 +222,7 @@ func (t *TestEnvironment) Cleanup(ctx goctx.Context, objs ...client.Object) erro
 	return kerrors.NewAggregate(errs)
 }
 
-func (t *TestEnvironment) CreateNamespace(ctx goctx.Context, generateName string) (*corev1.Namespace, error) {
+func (t *TestEnvironment) CreateNamespace(ctx context.Context, generateName string) (*corev1.Namespace, error) {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%s-", generateName),
@@ -213,7 +238,7 @@ func (t *TestEnvironment) CreateNamespace(ctx goctx.Context, generateName string
 	return ns, nil
 }
 
-func (t *TestEnvironment) CreateKubeconfigSecret(ctx goctx.Context, cluster *clusterv1.Cluster) error {
+func (t *TestEnvironment) CreateKubeconfigSecret(ctx context.Context, cluster *clusterv1.Cluster) error {
 	return t.Create(ctx, kubeconfig.GenerateSecret(cluster, kubeconfig.FromEnvTestConfig(t.Config, cluster)))
 }
 

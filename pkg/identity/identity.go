@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package identity contains tools for managing secrets used to access the VCenter API.
 package identity
 
 import (
@@ -31,15 +32,19 @@ import (
 )
 
 const (
+	// UsernameKey is the key used for the username.
 	UsernameKey = "username"
+	// PasswordKey is the key used for the password.
 	PasswordKey = "password"
 )
 
+// Credentials are the user credentials used with the VSphere API.
 type Credentials struct {
 	Username string
 	Password string
 }
 
+// GetCredentials returns the VCenter credentials for the VSphereCluster.
 func GetCredentials(ctx context.Context, c client.Client, cluster *infrav1.VSphereCluster, controllerNamespace string) (*Credentials, error) {
 	if err := validateInputs(c, cluster); err != nil {
 		return nil, err
@@ -122,14 +127,15 @@ func validateInputs(c client.Client, cluster *infrav1.VSphereCluster) error {
 	return nil
 }
 
+// IsSecretIdentity returns true if the VSphereCluster identity is a Secret.
 func IsSecretIdentity(cluster *infrav1.VSphereCluster) bool {
 	if cluster == nil || cluster.Spec.IdentityRef == nil {
 		return false
 	}
-
 	return cluster.Spec.IdentityRef.Kind == infrav1.SecretKind
 }
 
+// IsOwnedByIdentityOrCluster discovers if a secret is owned by a VSphereCluster or VSphereClusterIdentity.
 func IsOwnedByIdentityOrCluster(ownerReferences []metav1.OwnerReference) bool {
 	if len(ownerReferences) > 0 {
 		for _, ownerReference := range ownerReferences {

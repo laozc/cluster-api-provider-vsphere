@@ -90,6 +90,8 @@ systemd:
         # kubeadm must run after coreos-metadata populated /run/metadata directory.
         Requires=coreos-metadata.service
         After=coreos-metadata.service
+        # kubeadm must run after containerd - see https://github.com/kubernetes-sigs/image-builder/issues/939.
+        After=containerd.service
         [Service]
         # Make metadata environment variables available for pre-kubeadm commands.
         EnvironmentFile=/run/metadata/*`
@@ -569,7 +571,7 @@ func kubeVIPPodSpec() *corev1.Pod {
 			Containers: []corev1.Container{
 				{
 					Name:            "kube-vip",
-					Image:           "ghcr.io/kube-vip/kube-vip:v0.5.11",
+					Image:           "ghcr.io/kube-vip/kube-vip:v0.6.3",
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Args: []string{
 						"manager",
@@ -620,6 +622,16 @@ func kubeVIPPodSpec() *corev1.Pod {
 							// Number of times the leader will hold the lease for
 							Name:  "vip_retryperiod",
 							Value: "2",
+						},
+						{
+							// Enables kube-vip to watch Services of type LoadBalancer
+							Name:  "svc_enable",
+							Value: "true",
+						},
+						{
+							// Enables a leadership Election for each Service, allowing them to be distributed
+							Name:  "svc_election",
+							Value: "true",
 						},
 					},
 					SecurityContext: &corev1.SecurityContext{

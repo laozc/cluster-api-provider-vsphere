@@ -3,7 +3,6 @@ run:
   go: "1.20"
   skip-files:
     - "zz_generated.*\\.go$"
-    - apis/v1alpha3
   allow-parallel-runners: true
 
 linters:
@@ -13,7 +12,7 @@ linters:
   - asciicheck
   - bidichk
   - bodyclose
-  # - containedctx
+  - containedctx
   - dogsled
   - dupword
   - durationcheck
@@ -33,11 +32,12 @@ linters:
   - govet
   - importas
   - ineffassign
+  - loggercheck
   - misspell
   - nakedret
   - nilerr
   - noctx
-  # - nolintlint
+  - nolintlint
   - nosprintfhostport
   - prealloc
   - predeclared
@@ -55,7 +55,11 @@ linters:
 
 linters-settings:
   gci:
-    local-prefixes: "sigs.k8s.io/cluster-api-provider-vsphere"
+    sections:
+      - standard # Standard section: captures all standard packages.
+      - default # Default section: contains all imports that could not be matched to another section type.
+      - prefix(sigs.k8s.io/cluster-api-provider-vsphere) # Custom section: groups all imports with the specified Prefix.
+    custom-order: true
   godot:
     #   declarations - for top level declaration comments (default);
     #   toplevel     - for top level comments;
@@ -64,27 +68,27 @@ linters-settings:
     exclude:
       - '^ \+.*'
       - '^ ANCHOR.*'
-  # gocritic:
-  #   enabled-tags:
-  #     - diagnostic
-  #     - experimental
-  #     - performance
-  #   disabled-checks:
-  #     - appendAssign
-  #     - dupImport # https://github.com/go-critic/go-critic/issues/845
-  #     - evalOrder
-  #     - ifElseChain
-  #     - octalLiteral
-  #     - regexpSimplify
-  #     - sloppyReassign
-  #     - truncateCmp
-  #     - typeDefFirst
-  #     - unnamedResult
-  #     - unnecessaryDefer
-  #     - whyNoLint
-  #     - wrapperFunc
-  #     - rangeValCopy
-  #     - hugeParam
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - performance
+    disabled-checks:
+      - appendAssign
+      - dupImport # https://github.com/go-critic/go-critic/issues/845
+      - evalOrder
+      - ifElseChain
+      - octalLiteral
+      - regexpSimplify
+      - sloppyReassign
+      - truncateCmp
+      - typeDefFirst
+      - unnamedResult
+      - unnecessaryDefer
+      - whyNoLint
+      - wrapperFunc
+      - rangeValCopy
+      - hugeParam
   importas:
     no-unaliased: true
     alias:
@@ -107,10 +111,6 @@ linters-settings:
       # CAPV
       - pkg: sigs.k8s.io/cluster-api-provider-vsphere/apis/v1beta1
         alias: infrav1
-      - pkg: sigs.k8s.io/cluster-api-provider-vsphere/apis/v1alpha3
-        alias: infrav1alpha3
-      - pkg: sigs.k8s.io/cluster-api-provider-vsphere/apis/v1alpha4
-        alias: infrav1alpha4
       - pkg: sigs.k8s.io/cluster-api-provider-vsphere/apis/vmware/v1beta1
         alias: vmwarev1
       # VMware Operator
@@ -123,10 +123,6 @@ linters-settings:
       - pkg: sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1
         alias: controlplanev1
       # CAPI
-      - pkg: sigs.k8s.io/cluster-api/api/v1alpha3
-        alias: clusterv1alpha3
-      - pkg: sigs.k8s.io/cluster-api/api/v1alpha4
-        alias: clusterv1alpha4
       - pkg: sigs.k8s.io/cluster-api/api/v1beta1
         alias: clusterv1
       # CAPI exp
@@ -174,6 +170,8 @@ linters-settings:
 
   ginkgolinter:
     forbid-focus-container: true
+  goconst:
+    ignore-tests: true
 
 issues:
   max-same-issues: 0
@@ -182,13 +180,14 @@ issues:
   # changes in PRs and avoid nitpicking.
   exclude-use-default: false
   exclude-rules:
-  # Specific exclude rules for deprecated fields that are still part of the codebase. These
+  # Specific exclude rules for deprecated items that are still part of the codebase. These
   # should be removed as the referenced deprecated item is removed from the project.
-  # Specific exclude rules for deprecated packages that are still part of the codebase. These
-  # should be removed as the referenced deprecated packages are removed from the project.
   - linters:
     - staticcheck
     text: "SA1019: .* is deprecated: This package will be removed in one of the next releases."
+  - linters:
+    - staticcheck
+    text: "SA1019: .* is deprecated: This field is going to be removed in a future release."
   - linters:
     - revive
     text: "exported: exported method .*\\.(Reconcile|SetupWithManager|SetupWebhookWithManager) should have comment or be unexported"
@@ -214,7 +213,17 @@ issues:
   - linters:
     - revive
     - stylecheck
-    path: test/.*.go
+    path: _test\.go
+    text: should not use dot imports
+  - linters:
+    - revive
+    - stylecheck
+    path: test/e2e/.*.go
+    text: should not use dot imports
+  - linters:
+    - revive
+    - stylecheck
+    path: test/helpers/vmware/.*.go
     text: should not use dot imports
   # Append should be able to assign to a different var/slice.
   - linters:
@@ -257,46 +266,3 @@ issues:
     - stylecheck
     text: "ST1016: methods on the same type should have the same receiver name"
     path: ^apis\/.*\/.*conversion.*\.go$
-
-  # FIXME: All below excludes should get removed over time.
-  - linters:
-    - staticcheck
-    text: "SA1019: failureDomain.AutoConfigure is deprecated"
-  - path: "test/e2e/*"
-    linters:
-      - gosec
-    text: "G106:"
-
-  # missing comments
-  - linters:
-    - revive
-    text: "package-comments"
-    path: ^(main|(packaging|apis|controllers|feature|test|pkg)\/.*)\.go$
-  - linters:
-    - stylecheck
-    text: "ST1000"
-    path: ^(main|(packaging|apis|controllers|feature|test|pkg)\/.*)\.go$
-  - linters:
-    - revive
-    text: exported (.*) should have comment (.*)or be unexported
-    path: "^(apis|controllers|packaging|pkg)/.*.go"
-
-  # wrong comment
-  - linters:
-    - revive
-    text: comment on exported (.*) should be of the form (.*)
-    path: "^(apis|packaging|pkg/(constants|services|util))/"
-  - linters:
-    - stylecheck
-    text: ST1021|ST1020
-    path: "^(apis|packaging|pkg/(constants|services|util))/"
-
-  # gosec
-  - linters:
-    - gosec
-    text: "G104: Errors unhandled."
-    path: ^(controllers/vspherecluster_reconciler|pkg/manager/options_test|test/helpers/webhook)\.go$
-  - linters:
-    - gosec
-    text: "(G204|G301|G304): "
-    path: ^test/

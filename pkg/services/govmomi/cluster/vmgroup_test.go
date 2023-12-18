@@ -43,14 +43,13 @@ func Test_VMGroup(t *testing.T) {
 	finder.SetDatacenter(dc)
 
 	computeClusterCtx := testComputeClusterCtx{
-		Context: context.Background(),
-		finder:  finder,
+		finder: finder,
 	}
 
 	computeClusterName := "DC0_C0"
 	vmGroupName := "blah-vm-group"
 
-	vmGrp, err := FindVMGroup(computeClusterCtx, computeClusterName, vmGroupName)
+	vmGrp, err := FindVMGroup(ctx, computeClusterCtx, computeClusterName, vmGroupName)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(vmGrp.listVMs()).To(HaveLen(2))
 
@@ -62,7 +61,7 @@ func Test_VMGroup(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(hasVM).To(BeFalse())
 
-	task, err := vmGrp.Add(computeClusterCtx, vmRef)
+	task, err := vmGrp.Add(ctx, vmRef)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(task.Wait(ctx)).To(Succeed())
 	g.Expect(vmGrp.listVMs()).To(HaveLen(3))
@@ -72,6 +71,6 @@ func Test_VMGroup(t *testing.T) {
 	g.Expect(hasVM).To(BeTrue())
 
 	vmGroupName = "incorrect-vm-group"
-	_, err = FindVMGroup(computeClusterCtx, computeClusterName, vmGroupName)
+	_, err = FindVMGroup(ctx, computeClusterCtx, computeClusterName, vmGroupName)
 	g.Expect(err).To(HaveOccurred())
 }

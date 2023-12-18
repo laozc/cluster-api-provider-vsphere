@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	v1 "k8s.io/api/admissionregistration/v1"
@@ -55,7 +54,7 @@ func appendWebhookConfiguration(configyamlFile []byte, tag string) ([]*v1.Mutati
 			// update the name in metadata
 			if o.GetName() == mutatingwebhook {
 				var m v1.MutatingWebhookConfiguration
-				o.SetName(strings.Join([]string{mutatingwebhook, "-", tag}, ""))
+				o.SetName(mutatingwebhook + "-" + tag)
 				if err := scheme.Convert(&o, &m, nil); err != nil {
 					return nil, nil, err
 				}
@@ -66,7 +65,7 @@ func appendWebhookConfiguration(configyamlFile []byte, tag string) ([]*v1.Mutati
 			// update the name in metadata
 			if o.GetName() == validatingwebhook {
 				var v v1.ValidatingWebhookConfiguration
-				o.SetName(strings.Join([]string{validatingwebhook, "-", tag}, ""))
+				o.SetName(validatingwebhook + "-" + tag)
 				if err := scheme.Convert(&o, &v, nil); err != nil {
 					return nil, nil, err
 				}
@@ -79,9 +78,12 @@ func appendWebhookConfiguration(configyamlFile []byte, tag string) ([]*v1.Mutati
 
 func initializeWebhookInEnvironment() {
 	// Get the root of the current file to use in CRD paths.
-	_, filename, _, _ := goruntime.Caller(0) //nolint
+	_, filename, _, ok := goruntime.Caller(0)
+	if !ok {
+		klog.Fatalf("Failed to get information for current file from runtime")
+	}
 	root := path.Join(path.Dir(filename), "..", "..")
-	configyamlFile, err := os.ReadFile(filepath.Join(root, "config", "webhook", "manifests.yaml"))
+	configyamlFile, err := os.ReadFile(filepath.Clean(filepath.Join(root, "config", "webhook", "manifests.yaml")))
 	if err != nil {
 		klog.Fatalf("Failed to read core webhook configuration file: %v ", err)
 	}
@@ -114,7 +116,9 @@ func (t *TestEnvironment) WaitForWebhooks() {
 			klog.V(2).Infof("Webhook port is not ready, will retry in %v: %s", timeout, err)
 			continue
 		}
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			klog.V(2).Info("Connection to webhook port could not be closed. Continuing with tests...")
+		}
 		klog.V(2).Info("Webhook port is now open. Continuing with tests...")
 		return
 	}

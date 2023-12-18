@@ -17,7 +17,7 @@ limitations under the License.
 package helpers
 
 import (
-	goctx "context"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -32,15 +32,15 @@ import (
 
 // Util functions to interact with the clusterctl e2e framework.
 
-func LoadE2EConfig(configPath string) (*clusterctl.E2EConfig, error) {
-	config := clusterctl.LoadE2EConfig(goctx.TODO(), clusterctl.LoadE2EConfigInput{ConfigPath: configPath})
+func LoadE2EConfig(ctx context.Context, configPath string) (*clusterctl.E2EConfig, error) {
+	config := clusterctl.LoadE2EConfig(ctx, clusterctl.LoadE2EConfigInput{ConfigPath: configPath})
 	if config == nil {
 		return nil, fmt.Errorf("cannot load E2E config found at %s", configPath)
 	}
 	return config, nil
 }
 
-func CreateClusterctlLocalRepository(config *clusterctl.E2EConfig, repositoryFolder string, cniEnabled bool) (string, error) {
+func CreateClusterctlLocalRepository(ctx context.Context, config *clusterctl.E2EConfig, repositoryFolder string, cniEnabled bool) (string, error) {
 	createRepositoryInput := clusterctl.CreateRepositoryInput{
 		E2EConfig:        config,
 		RepositoryFolder: repositoryFolder,
@@ -58,18 +58,18 @@ func CreateClusterctlLocalRepository(config *clusterctl.E2EConfig, repositoryFol
 		createRepositoryInput.RegisterClusterResourceSetConfigMapTransformation(cniPath, capi_e2e.CNIResources)
 	}
 
-	clusterctlConfig := clusterctl.CreateRepository(goctx.TODO(), createRepositoryInput)
+	clusterctlConfig := clusterctl.CreateRepository(ctx, createRepositoryInput)
 	if _, err := os.Stat(clusterctlConfig); err != nil {
 		return "", fmt.Errorf("the clusterctl config file does not exists in the local repository %s", repositoryFolder)
 	}
 	return clusterctlConfig, nil
 }
 
-func SetupBootstrapCluster(config *clusterctl.E2EConfig, scheme *runtime.Scheme, useExistingCluster bool) (bootstrap.ClusterProvider, framework.ClusterProxy, error) {
+func SetupBootstrapCluster(ctx context.Context, config *clusterctl.E2EConfig, scheme *runtime.Scheme, useExistingCluster bool) (bootstrap.ClusterProvider, framework.ClusterProxy, error) {
 	var clusterProvider bootstrap.ClusterProvider
 	kubeconfigPath := ""
 	if !useExistingCluster {
-		clusterProvider = bootstrap.CreateKindBootstrapClusterAndLoadImages(goctx.TODO(), bootstrap.CreateKindBootstrapClusterAndLoadImagesInput{
+		clusterProvider = bootstrap.CreateKindBootstrapClusterAndLoadImages(ctx, bootstrap.CreateKindBootstrapClusterAndLoadImagesInput{
 			Name:               config.ManagementClusterName,
 			RequiresDockerSock: config.HasDockerProvider(),
 			Images:             config.Images,
@@ -86,8 +86,8 @@ func SetupBootstrapCluster(config *clusterctl.E2EConfig, scheme *runtime.Scheme,
 	return clusterProvider, clusterProxy, nil
 }
 
-func InitBootstrapCluster(bootstrapClusterProxy framework.ClusterProxy, config *clusterctl.E2EConfig, clusterctlConfig, artifactFolder string) {
-	clusterctl.InitManagementClusterAndWatchControllerLogs(goctx.TODO(), clusterctl.InitManagementClusterAndWatchControllerLogsInput{
+func InitBootstrapCluster(ctx context.Context, bootstrapClusterProxy framework.ClusterProxy, config *clusterctl.E2EConfig, clusterctlConfig, artifactFolder string) {
+	clusterctl.InitManagementClusterAndWatchControllerLogs(ctx, clusterctl.InitManagementClusterAndWatchControllerLogsInput{
 		ClusterProxy:            bootstrapClusterProxy,
 		ClusterctlConfigPath:    clusterctlConfig,
 		InfrastructureProviders: config.InfrastructureProviders(),
@@ -95,11 +95,11 @@ func InitBootstrapCluster(bootstrapClusterProxy framework.ClusterProxy, config *
 	}, config.GetIntervals(bootstrapClusterProxy.GetName(), "wait-controllers")...)
 }
 
-func TearDown(bootstrapClusterProvider bootstrap.ClusterProvider, bootstrapClusterProxy framework.ClusterProxy) {
+func TearDown(ctx context.Context, bootstrapClusterProvider bootstrap.ClusterProvider, bootstrapClusterProxy framework.ClusterProxy) {
 	if bootstrapClusterProxy != nil {
-		bootstrapClusterProxy.Dispose(goctx.TODO())
+		bootstrapClusterProxy.Dispose(ctx)
 	}
 	if bootstrapClusterProvider != nil {
-		bootstrapClusterProvider.Dispose(goctx.TODO())
+		bootstrapClusterProvider.Dispose(ctx)
 	}
 }

@@ -17,15 +17,16 @@ limitations under the License.
 package controllers
 
 import (
-	_context "context"
+	"context"
 	"fmt"
-	"reflect"
-	"strings"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	clusterutilv1 "sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -39,54 +40,39 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1beta1"
-	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
+	capvcontext "sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
 	pkgidentity "sigs.k8s.io/cluster-api-provider-vsphere/pkg/identity"
-	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/record"
-)
-
-var (
-	identityControlledType     = &infrav1.VSphereClusterIdentity{}
-	identityControlledTypeName = reflect.TypeOf(identityControlledType).Elem().Name()
 )
 
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=vsphereclusteridentities,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=vsphereclusteridentities/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;patch;update;delete
 
-func AddVsphereClusterIdentityControllerToManager(ctx *context.ControllerManagerContext, mgr manager.Manager, options controller.Options) error {
-	var (
-		controllerNameShort = fmt.Sprintf("%s-controller", strings.ToLower(identityControlledTypeName))
-		controllerNameLong  = fmt.Sprintf("%s/%s/%s", ctx.Namespace, ctx.Name, controllerNameShort)
-	)
-
-	// Build the controller context.
-	controllerContext := &context.ControllerContext{
-		ControllerManagerContext: ctx,
-		Name:                     controllerNameShort,
-		Recorder:                 record.New(mgr.GetEventRecorderFor(controllerNameLong)),
-		Logger:                   ctx.Logger.WithName(controllerNameShort),
+// AddVsphereClusterIdentityControllerToManager adds a VSphereClusterIdentity controller to the controller manager.
+func AddVsphereClusterIdentityControllerToManager(ctx context.Context, controllerManagerCtx *capvcontext.ControllerManagerContext, mgr manager.Manager, options controller.Options) error {
+	reconciler := clusterIdentityReconciler{
+		ControllerManagerCtx: controllerManagerCtx,
+		Client:               controllerManagerCtx.Client,
+		Recorder:             mgr.GetEventRecorderFor("vsphereclusteridentity-controller"),
 	}
 
-	reconciler := clusterIdentityReconciler{ControllerContext: controllerContext}
-
 	return ctrl.NewControllerManagedBy(mgr).
-		For(identityControlledType).
+		For(&infrav1.VSphereClusterIdentity{}).
 		WithOptions(options).
-		WithEventFilter(predicates.ResourceNotPausedAndHasFilterLabel(ctrl.LoggerFrom(ctx), ctx.WatchFilterValue)).
+		WithEventFilter(predicates.ResourceNotPausedAndHasFilterLabel(ctrl.LoggerFrom(ctx), controllerManagerCtx.WatchFilterValue)).
 		Complete(reconciler)
 }
 
 type clusterIdentityReconciler struct {
-	*context.ControllerContext
+	ControllerManagerCtx *capvcontext.ControllerManagerContext
+	Client               client.Client
+	Recorder             record.EventRecorder
 }
 
-func (r clusterIdentityReconciler) Reconcile(ctx _context.Context, req reconcile.Request) (_ reconcile.Result, reterr error) {
-	// TODO(gab-satchi) consider creating a context for the clusterIdentity
-	// Get VSphereClusterIdentity
+func (r clusterIdentityReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, reterr error) {
 	identity := &infrav1.VSphereClusterIdentity{}
-	if err := r.Client.Get(r, req.NamespacedName, identity); err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, identity); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.Logger.V(4).Info("VSphereClusterIdentity not found, won't reconcile", "key", req.NamespacedName)
 			return reconcile.Result{}, nil
 		}
 
@@ -96,22 +82,14 @@ func (r clusterIdentityReconciler) Reconcile(ctx _context.Context, req reconcile
 	// Create the patch helper.
 	patchHelper, err := patch.NewHelper(identity, r.Client)
 	if err != nil {
-		return reconcile.Result{}, errors.Wrapf(
-			err,
-			"failed to init patch helper for %s %s/%s",
-			identity.GroupVersionKind(),
-			identity.Namespace,
-			identity.Name)
+		return reconcile.Result{}, errors.Wrap(err, "failed to initialize patch helper")
 	}
 
 	defer func() {
 		conditions.SetSummary(identity, conditions.WithConditions(infrav1.CredentialsAvailableCondidtion))
 
 		if err := patchHelper.Patch(ctx, identity); err != nil {
-			if reterr == nil {
-				reterr = err
-			}
-			r.Logger.Error(err, "patch failed", "namespace", identity.Namespace, "name", identity.Name)
+			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 	}()
 
@@ -119,41 +97,47 @@ func (r clusterIdentityReconciler) Reconcile(ctx _context.Context, req reconcile
 		return ctrl.Result{}, r.reconcileDelete(ctx, identity)
 	}
 
+	// Add a finalizer and requeue to ensure that the secret is deleted when the identity is deleted.
+	if !ctrlutil.ContainsFinalizer(identity, infrav1.VSphereClusterIdentityFinalizer) {
+		ctrlutil.AddFinalizer(identity, infrav1.VSphereClusterIdentityFinalizer)
+		return reconcile.Result{}, nil
+	}
+
 	// fetch secret
 	secret := &corev1.Secret{}
 	secretKey := client.ObjectKey{
-		Namespace: r.Namespace,
+		Namespace: r.ControllerManagerCtx.Namespace,
 		Name:      identity.Spec.SecretName,
 	}
 	if err := r.Client.Get(ctx, secretKey, secret); err != nil {
 		conditions.MarkFalse(identity, infrav1.CredentialsAvailableCondidtion, infrav1.SecretNotAvailableReason, clusterv1.ConditionSeverityWarning, err.Error())
-		return reconcile.Result{}, errors.Errorf("secret: %s not found in namespace: %s", secretKey.Name, secretKey.Namespace)
+		return reconcile.Result{}, errors.Wrapf(err, "failed to get Secret %s", klog.KRef(secretKey.Namespace, secretKey.Name))
 	}
 
-	if !clusterutilv1.IsOwnedByObject(secret, identity) {
-		ownerReferences := secret.GetOwnerReferences()
-		if pkgidentity.IsOwnedByIdentityOrCluster(ownerReferences) {
-			conditions.MarkFalse(identity, infrav1.CredentialsAvailableCondidtion, infrav1.SecretAlreadyInUseReason, clusterv1.ConditionSeverityError, "secret being used by another Cluster/VSphereIdentity")
-			identity.Status.Ready = false
-			return reconcile.Result{}, errors.New("secret being used by another Cluster/VSphereIdentity")
-		}
+	// If this secret is owned by a different VSphereClusterIdentity or a VSphereCluster, mark the identity as not ready and return an error.
+	if !clusterutilv1.IsOwnedByObject(secret, identity) && pkgidentity.IsOwnedByIdentityOrCluster(secret.GetOwnerReferences()) {
+		conditions.MarkFalse(identity, infrav1.CredentialsAvailableCondidtion, infrav1.SecretAlreadyInUseReason, clusterv1.ConditionSeverityError, "secret being used by another Cluster/VSphereIdentity")
+		identity.Status.Ready = false
+		return reconcile.Result{}, errors.New("secret being used by another Cluster/VSphereIdentity")
+	}
 
-		ownerReferences = append(ownerReferences, metav1.OwnerReference{
-			APIVersion: infrav1.GroupVersion.String(),
-			Kind:       identity.Kind,
-			Name:       identity.Name,
-			UID:        identity.UID,
-		})
-		secret.SetOwnerReferences(ownerReferences)
+	// Ensure the VSphereClusterIdentity is set as the owner of the secret, and that the reference has an up to date APIVersion.
+	secret.SetOwnerReferences(
+		clusterutilv1.EnsureOwnerRef(secret.GetOwnerReferences(),
+			metav1.OwnerReference{
+				APIVersion: infrav1.GroupVersion.String(),
+				Kind:       identity.Kind,
+				Name:       identity.Name,
+				UID:        identity.UID,
+			}))
 
-		if !ctrlutil.ContainsFinalizer(secret, infrav1.SecretIdentitySetFinalizer) {
-			ctrlutil.AddFinalizer(secret, infrav1.SecretIdentitySetFinalizer)
-		}
-		err = r.Client.Update(ctx, secret)
-		if err != nil {
-			conditions.MarkFalse(identity, infrav1.CredentialsAvailableCondidtion, infrav1.SecretOwnerReferenceFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-			return reconcile.Result{}, err
-		}
+	if !ctrlutil.ContainsFinalizer(secret, infrav1.SecretIdentitySetFinalizer) {
+		ctrlutil.AddFinalizer(secret, infrav1.SecretIdentitySetFinalizer)
+	}
+	err = r.Client.Update(ctx, secret)
+	if err != nil {
+		conditions.MarkFalse(identity, infrav1.CredentialsAvailableCondidtion, infrav1.SecretOwnerReferenceFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
+		return reconcile.Result{}, err
 	}
 
 	conditions.MarkTrue(identity, infrav1.CredentialsAvailableCondidtion)
@@ -161,29 +145,38 @@ func (r clusterIdentityReconciler) Reconcile(ctx _context.Context, req reconcile
 	return reconcile.Result{}, nil
 }
 
-func (r clusterIdentityReconciler) reconcileDelete(ctx _context.Context, identity *infrav1.VSphereClusterIdentity) error {
-	r.Logger.Info("Reconciling VSphereClusterIdentity delete")
+func (r clusterIdentityReconciler) reconcileDelete(ctx context.Context, identity *infrav1.VSphereClusterIdentity) error {
+	log := ctrl.LoggerFrom(ctx)
 	secret := &corev1.Secret{}
 	secretKey := client.ObjectKey{
-		Namespace: r.Namespace,
+		Namespace: r.ControllerManagerCtx.Namespace,
 		Name:      identity.Spec.SecretName,
 	}
 	err := r.Client.Get(ctx, secretKey, secret)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			// The secret no longer exists. Remove the finalizer from the VSphereClusterIdentity.
+			ctrlutil.RemoveFinalizer(identity, infrav1.VSphereClusterIdentityFinalizer)
 			return nil
 		}
 		return err
 	}
-	r.Logger.Info(fmt.Sprintf("Removing finalizer from Secret %s/%s", secret.Namespace, secret.Name))
-	// Check if the old finalizer(from v0.7) is present, if yes, delete it
-	// For more context, please refer: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/issues/1482
-	if ctrlutil.ContainsFinalizer(secret, legacyIdentityFinalizer) {
-		ctrlutil.RemoveFinalizer(secret, legacyIdentityFinalizer)
+
+	if ctrlutil.RemoveFinalizer(secret, infrav1.SecretIdentitySetFinalizer) {
+		log.Info(fmt.Sprintf("Removing finalizer %s", infrav1.SecretIdentitySetFinalizer), "Secret", klog.KObj(secret))
+		if err := r.Client.Update(ctx, secret); err != nil {
+			return errors.Wrapf(err, fmt.Sprintf("failed to update Secret %s", klog.KObj(secret)))
+		}
 	}
-	ctrlutil.RemoveFinalizer(secret, infrav1.SecretIdentitySetFinalizer)
-	if err := r.Client.Update(ctx, secret); err != nil {
-		return err
+
+	if secret.DeletionTimestamp.IsZero() {
+		log.Info("Deleting Secret", "Secret", klog.KObj(secret))
+		if err := r.Client.Delete(ctx, secret); err != nil {
+			return errors.Wrapf(err, fmt.Sprintf("failed to delete Secret %s", klog.KObj(secret)))
+		}
 	}
-	return r.Client.Delete(ctx, secret)
+
+	// Remove the finalizer from the identity as all cleanup is complete.
+	ctrlutil.RemoveFinalizer(identity, infrav1.VSphereClusterIdentityFinalizer)
+	return nil
 }

@@ -17,8 +17,6 @@ limitations under the License.
 package util
 
 import (
-	goctx "context"
-
 	netopv1 "github.com/vmware-tanzu/net-operator-api/api/v1alpha1"
 	vmoprv1 "github.com/vmware-tanzu/vm-operator/api/v1alpha1"
 	ncpv1 "github.com/vmware-tanzu/vm-operator/external/ncp/api/v1alpha1"
@@ -33,7 +31,7 @@ import (
 	testclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	vmwarev1 "sigs.k8s.io/cluster-api-provider-vsphere/apis/vmware/v1beta1"
-	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
+	capvcontext "sigs.k8s.io/cluster-api-provider-vsphere/pkg/context"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context/vmware"
 )
 
@@ -124,9 +122,10 @@ func CreateVSphereMachine(machineName, clusterName, className, imageName, storag
 			},
 		},
 		Spec: vmwarev1.VSphereMachineSpec{
-			ClassName:    className,
-			ImageName:    imageName,
-			StorageClass: storageClass,
+			ClassName:          className,
+			ImageName:          imageName,
+			StorageClass:       storageClass,
+			MinHardwareVersion: "vmx-17",
 		},
 	}
 	if controlPlaneLabel {
@@ -149,39 +148,28 @@ func createScheme() *runtime.Scheme {
 	return scheme
 }
 
-func CreateClusterContext(cluster *clusterv1.Cluster, vsphereCluster *vmwarev1.VSphereCluster) *vmware.ClusterContext {
+func CreateClusterContext(cluster *clusterv1.Cluster, vsphereCluster *vmwarev1.VSphereCluster) (*vmware.ClusterContext, *capvcontext.ControllerManagerContext) {
 	scheme := createScheme()
-	controllerManagerContext := &context.ControllerManagerContext{
-		Context: goctx.Background(),
-		Logger:  klog.Background().WithName("controller-manager-logger"),
-		Scheme:  scheme,
-		Client: testclient.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
-			&vmoprv1.VirtualMachineService{},
-			&vmoprv1.VirtualMachine{},
-		).Build(),
-	}
-
-	// Build the controller context.
-	controllerContext := &context.ControllerContext{
-		ControllerManagerContext: controllerManagerContext,
-		Logger:                   controllerManagerContext.Logger.WithName("controller-logger"),
-	}
 
 	// Build the cluster context.
 	return &vmware.ClusterContext{
-		ControllerContext: controllerContext,
-		Logger:            controllerContext.Logger.WithName("cluster-context-logger"),
-		Cluster:           cluster,
-		VSphereCluster:    vsphereCluster,
-	}
+			Cluster:        cluster,
+			VSphereCluster: vsphereCluster,
+		}, &capvcontext.ControllerManagerContext{
+			Logger: klog.Background().WithName("controller-manager-logger"),
+			Scheme: scheme,
+			Client: testclient.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+				&vmoprv1.VirtualMachineService{},
+				&vmoprv1.VirtualMachine{},
+			).Build(),
+		}
 }
 
 func CreateMachineContext(clusterContext *vmware.ClusterContext, machine *clusterv1.Machine,
 	vsphereMachine *vmwarev1.VSphereMachine) *vmware.SupervisorMachineContext {
 	// Build the machine context.
 	return &vmware.SupervisorMachineContext{
-		BaseMachineContext: &context.BaseMachineContext{
-			Logger:  clusterContext.Logger.WithName(vsphereMachine.Name),
+		BaseMachineContext: &capvcontext.BaseMachineContext{
 			Machine: machine,
 			Cluster: clusterContext.Cluster,
 		},

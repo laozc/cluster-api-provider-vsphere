@@ -24,8 +24,9 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 )
 
-func FindVMGroup(ctx computeClusterContext, clusterName, vmGroupName string) (*VMGroup, error) {
-	ccr, err := ctx.GetSession().Finder.ClusterComputeResource(ctx, clusterName)
+// FindVMGroup returns the VSphereVMGroup object.
+func FindVMGroup(ctx context.Context, computeClusterCtx computeClusterContext, clusterName, vmGroupName string) (*VMGroup, error) {
+	ccr, err := computeClusterCtx.GetSession().Finder.ClusterComputeResource(ctx, clusterName)
 	if err != nil {
 		return nil, err
 	}

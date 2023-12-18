@@ -35,6 +35,28 @@ spec:
   - definitions:
     - jsonPatches:
       - op: add
+        path: /spec/template/spec/kubeadmConfigSpec/files
+        value: []
+      selector:
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+        kind: KubeadmControlPlaneTemplate
+        matchResources:
+          controlPlane: true
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/files
+        value: []
+      selector:
+        apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+        kind: KubeadmConfigTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - ${CLUSTER_CLASS_NAME}-worker
+    name: createFilesArray
+  - definitions:
+    - jsonPatches:
+      - op: add
         path: /spec/template/spec/kubeadmConfigSpec/users
         valueFrom:
           template: |
@@ -96,15 +118,18 @@ spec:
   - definitions:
     - jsonPatches:
       - op: add
-        path: /spec/template/spec/kubeadmConfigSpec/files/0/content
+        path: /spec/template/spec/kubeadmConfigSpec/files/-
         valueFrom:
-          variable: kubeVipPodManifest
+          template: |-
+            owner: root:root
+            path:  "/etc/kubernetes/manifests/kube-vip.yaml"
+            content: {{ printf "%q" (regexReplaceAll "(name: address\n +value:).*" .kubeVipPodManifest (printf "$1 %s" .controlPlaneIpAddr)) }}
       selector:
         apiVersion: controlplane.cluster.x-k8s.io/v1beta1
         kind: KubeadmControlPlaneTemplate
         matchResources:
           controlPlane: true
-    name: kubeVipEnabled
+    name: kubeVipPodManifest
   variables:
   - name: sshKey
     required: false
@@ -228,9 +253,6 @@ spec:
           controllerManager:
             extraArgs:
               cloud-provider: external
-        files:
-        - owner: root:root
-          path: /etc/kubernetes/manifests/kube-vip.yaml
         initConfiguration:
           nodeRegistration:
             criSocket: /var/run/containerd/containerd.sock

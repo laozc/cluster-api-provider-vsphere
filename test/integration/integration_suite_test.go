@@ -17,7 +17,6 @@ limitations under the License.
 package integration
 
 import (
-	goctx "context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -67,9 +66,9 @@ const (
 )
 
 var (
+	ctx                    = ctrl.SetupSignalHandler()
 	testClusterName        string
 	dummyKubernetesVersion = "1.15.0+vmware.1"
-	ctx                    goctx.Context
 	k8sClient              dynamic.Interface
 )
 
@@ -227,26 +226,25 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(configPath).To(BeAnExistingFile(), "Invalid test suite argument. e2e.config should be an existing file.")
-	Expect(os.MkdirAll(artifactFolder, 0755)).To(Succeed(), "Invalid test suite argument. Can't create e2e.artifacts-folder %q", artifactFolder)
+	Expect(os.MkdirAll(artifactFolder, 0755)).To(Succeed(), "Invalid test suite argument. Can't create e2e.artifacts-folder %q", artifactFolder) //nolint:gosec // Non-production code
 
 	By("Initializing a runtime.Scheme with all the GVK relevant for this test")
 	scheme := initScheme()
 
 	Byf("Loading the e2e test configuration from %q", configPath)
-	e2eConfig, err = helpers.LoadE2EConfig(configPath)
+	e2eConfig, err = helpers.LoadE2EConfig(ctx, configPath)
 	Expect(err).NotTo(HaveOccurred())
 
 	Byf("Creating a clusterctl local repository into %q", artifactFolder)
-	clusterctlConfigPath, err = helpers.CreateClusterctlLocalRepository(e2eConfig, filepath.Join(artifactFolder, "repository"), false)
+	clusterctlConfigPath, err = helpers.CreateClusterctlLocalRepository(ctx, e2eConfig, filepath.Join(artifactFolder, "repository"), false)
 	Expect(err).NotTo(HaveOccurred())
 
 	By("Setting up the bootstrap cluster")
-	bootstrapClusterProvider, bootstrapClusterProxy, err = helpers.SetupBootstrapCluster(e2eConfig, scheme, useExistingCluster)
+	bootstrapClusterProvider, bootstrapClusterProxy, err = helpers.SetupBootstrapCluster(ctx, e2eConfig, scheme, useExistingCluster)
 	Expect(err).NotTo(HaveOccurred())
 
 	By("Initializing the bootstrap cluster")
-	helpers.InitBootstrapCluster(bootstrapClusterProxy, e2eConfig, clusterctlConfigPath, artifactFolder)
-	ctx = goctx.Background()
+	helpers.InitBootstrapCluster(ctx, bootstrapClusterProxy, e2eConfig, clusterctlConfigPath, artifactFolder)
 	return []byte(
 		strings.Join([]string{
 			artifactFolder,
@@ -266,7 +264,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	kubeconfigPath := parts[3]
 
 	var err error
-	e2eConfig, err = helpers.LoadE2EConfig(configPath)
+	e2eConfig, err = helpers.LoadE2EConfig(ctx, configPath)
 	Expect(err).NotTo(HaveOccurred())
 	bootstrapClusterProxy = framework.NewClusterProxy("bootstrap", kubeconfigPath, initScheme())
 	config := bootstrapClusterProxy.GetRESTConfig()
@@ -283,7 +281,7 @@ var _ = SynchronizedAfterSuite(func() {
 
 	By("Tearing down the management cluster")
 	if !skipCleanup {
-		helpers.TearDown(bootstrapClusterProvider, bootstrapClusterProxy)
+		helpers.TearDown(ctx, bootstrapClusterProvider, bootstrapClusterProxy)
 	}
 })
 
@@ -631,7 +629,6 @@ func updateResourceStatus(resource schema.GroupVersionResource, obj runtimeObjec
 	Expect(err).NotTo(HaveOccurred(), "Error updating status of %s %s/%s", resource, obj.GetNamespace(), obj.GetName())
 }
 
-//nolint:gocritic
 func assertEventuallyExists(resource schema.GroupVersionResource, name, ns string, ownerRef *metav1.OwnerReference) *unstructuredv1.Unstructured {
 	var obj *unstructuredv1.Unstructured
 	EventuallyWithOffset(1, func() (bool, error) {

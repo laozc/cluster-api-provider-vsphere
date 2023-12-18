@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	clusterutil1v1 "sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,7 +37,6 @@ import (
 	infrav1 "sigs.k8s.io/cluster-api-provider-vsphere/apis/v1beta1"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/context/fake"
 	"sigs.k8s.io/cluster-api-provider-vsphere/pkg/identity"
-	"sigs.k8s.io/cluster-api-provider-vsphere/test/helpers"
 	"sigs.k8s.io/cluster-api-provider-vsphere/test/helpers/vcsim"
 )
 
@@ -162,7 +160,6 @@ var _ = Describe("VIM based VSphere ClusterReconciler", func() {
 
 		It("should error if secret is already owned by a different cluster", func() {
 			ctx := context.Background()
-
 			capiCluster := &clusterv1.Cluster{
 				ObjectMeta: metav1.ObjectMeta{
 					GenerateName: "test1-",
@@ -244,121 +241,9 @@ var _ = Describe("VIM based VSphere ClusterReconciler", func() {
 			}, timeout).Should(BeTrue())
 		})
 	})
-	Context("Reconcile delete", func() {
-		var (
-			ctx             context.Context
-			secret          *corev1.Secret
-			capiCluster     *clusterv1.Cluster
-			instance        *infrav1.VSphereCluster
-			legacyFinalizer = "identity/infrastructure.cluster.x-k8s.io"
-			key             client.ObjectKey
-		)
-		It("should remove legacy finalizer if present during the cluster deletion", func() {
-			ctx = context.Background()
-			capiCluster = &clusterv1.Cluster{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "test1-",
-					Namespace:    "default",
-				},
-				Spec: clusterv1.ClusterSpec{
-					InfrastructureRef: &corev1.ObjectReference{
-						APIVersion: infrav1.GroupVersion.String(),
-						Kind:       "VsphereCluster",
-						Name:       "vsphere-test1",
-					},
-				},
-			}
-			defer func() {
-				Expect(testEnv.Cleanup(ctx, capiCluster)).To(Succeed())
-			}()
-
-			// Create the CAPI cluster (owner) object
-			Expect(testEnv.Create(ctx, capiCluster)).To(Succeed())
-
-			fakeVCenter := startVcenter()
-			vcURL := fakeVCenter.ServerURL()
-			defer fakeVCenter.Destroy()
-			// Create the secret containing the credentials
-			password, _ := vcURL.User.Password()
-
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "secret-",
-					Namespace:    "default",
-					Finalizers:   []string{legacyFinalizer},
-				},
-				Data: map[string][]byte{
-					identity.UsernameKey: []byte(vcURL.User.Username()),
-					identity.PasswordKey: []byte(password),
-				},
-			}
-			Expect(testEnv.Create(ctx, secret)).To(Succeed())
-			Eventually(func() error {
-				secretKey := client.ObjectKey{Namespace: secret.Namespace, Name: secret.Name}
-				return testEnv.Get(ctx, secretKey, secret)
-			}).Should(BeNil())
-
-			// Create the VSphereCluster object
-			instance = &infrav1.VSphereCluster{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "vsphere-test1",
-					Namespace: "default",
-					OwnerReferences: []metav1.OwnerReference{
-						{Kind: "Cluster", APIVersion: clusterv1.GroupVersion.String(), Name: capiCluster.Name, UID: "blah"},
-					},
-				},
-				Spec: infrav1.VSphereClusterSpec{
-					IdentityRef: &infrav1.VSphereIdentityReference{
-						Kind: infrav1.SecretKind,
-						Name: secret.Name,
-					},
-					Server: fmt.Sprintf("%s://%s", vcURL.Scheme, vcURL.Host),
-				},
-			}
-			Expect(testEnv.Create(ctx, instance)).To(Succeed())
-
-			// Make sure the VSphereCluster exists.
-			key = client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name}
-			Eventually(func() error {
-				return testEnv.Get(ctx, key, instance)
-			}, timeout).Should(BeNil())
-
-			By("checking that the finalizers on the object are set")
-			Eventually(func() bool {
-				if err := testEnv.Get(ctx, key, instance); err != nil {
-					return false
-				}
-				return len(instance.Finalizers) > 0
-			}, timeout).Should(BeTrue())
-
-			By("deleting the vspherecluster which has the secret with legacy finalizer")
-			Expect(testEnv.Delete(ctx, instance)).To(Succeed())
-
-			By("checking that the secret is deleted")
-			secretKey := client.ObjectKey{Namespace: secret.Namespace, Name: secret.Name}
-			Eventually(func() bool {
-				err := testEnv.Get(ctx, secretKey, secret)
-				return apierrors.IsNotFound(err)
-			}, timeout).Should(BeTrue())
-
-			// confirm that the VSphereCluster is deleted
-			Eventually(func() bool {
-				err := testEnv.Get(ctx, key, instance)
-				return apierrors.IsNotFound(err)
-			}, timeout).Should(BeTrue())
-
-			/*By("checking that the secret is deleted")
-			secretKey := client.ObjectKey{Namespace: secret.Namespace, Name: secret.Name}
-			Eventually(func() bool {
-				err := testEnv.Get(ctx, secretKey, secret)
-				return apierrors.IsNotFound(err)
-			}, timeout).Should(BeTrue())*/
-		})
-	})
 
 	It("should remove vspherecluster finalizer if the secret does not exist", func() {
 		ctx := context.Background()
-
 		capiCluster := &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test1-",
@@ -538,130 +423,7 @@ var _ = Describe("VIM based VSphere ClusterReconciler", func() {
 			})
 		})
 	})
-
-	Context("For VSphereMachines belonging to the cluster", func() {
-		var (
-			namespace string
-			testNs    *corev1.Namespace
-		)
-
-		BeforeEach(func() {
-			var err error
-			testNs, err = testEnv.CreateNamespace(ctx, "vsm-owner-ref")
-			Expect(err).NotTo(HaveOccurred())
-			namespace = testNs.Name
-		})
-
-		AfterEach(func() {
-			Expect(testEnv.Delete(ctx, testNs)).To(Succeed())
-		})
-
-		It("sets owner references to those machines", func() {
-			// Create the VSphereCluster object
-			instance := &infrav1.VSphereCluster{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "test1-",
-					Namespace:    namespace,
-				},
-				Spec: infrav1.VSphereClusterSpec{
-					Server: testEnv.Simulator.ServerURL().Host,
-				},
-			}
-			Expect(testEnv.Create(ctx, instance)).To(Succeed())
-
-			capiCluster := &clusterv1.Cluster{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "capi-test1-",
-					Namespace:    namespace,
-				},
-				Spec: clusterv1.ClusterSpec{
-					InfrastructureRef: &corev1.ObjectReference{
-						APIVersion: infrav1.GroupVersion.String(),
-						Kind:       "VsphereCluster",
-						Name:       instance.Name,
-					},
-				},
-			}
-			Expect(testEnv.Create(ctx, capiCluster)).To(Succeed())
-
-			// Make sure the VSphereCluster exists.
-			key := client.ObjectKey{Namespace: namespace, Name: instance.Name}
-			Eventually(func() error {
-				return testEnv.Get(ctx, key, instance)
-			}, timeout).Should(BeNil())
-
-			machineCount := 3
-			for i := 0; i < machineCount; i++ {
-				Expect(createVsphereMachine(ctx, testEnv, namespace, capiCluster.Name)).To(Succeed())
-			}
-
-			Eventually(func() bool {
-				ph, err := patch.NewHelper(instance, testEnv)
-				Expect(err).ShouldNot(HaveOccurred())
-				instance.OwnerReferences = append(instance.OwnerReferences, metav1.OwnerReference{
-					Kind:       "Cluster",
-					APIVersion: clusterv1.GroupVersion.String(),
-					Name:       capiCluster.Name,
-					UID:        "blah",
-				})
-				Expect(ph.Patch(ctx, instance, patch.WithStatusObservedGeneration{})).ShouldNot(HaveOccurred())
-				return true
-			}, timeout).Should(BeTrue())
-
-			By("checking for presence of VSphereMachine objects")
-			Eventually(func() int {
-				machines := &infrav1.VSphereMachineList{}
-				if err := testEnv.List(ctx, machines, client.InNamespace(namespace),
-					client.MatchingLabels(map[string]string{clusterv1.ClusterNameLabel: capiCluster.Name})); err != nil {
-					return -1
-				}
-				return len(machines.Items)
-			}, timeout).Should(Equal(machineCount))
-
-			By("checking VSphereMachine owner refs")
-			Eventually(func() int {
-				machines := &infrav1.VSphereMachineList{}
-				if err := testEnv.List(ctx, machines, client.InNamespace(namespace),
-					client.MatchingLabels(map[string]string{clusterv1.ClusterNameLabel: capiCluster.Name})); err != nil {
-					return 0
-				}
-				ownerRefSet := 0
-				for _, m := range machines.Items {
-					if len(m.OwnerReferences) >= 1 && clusterutil1v1.HasOwnerRef(m.OwnerReferences, metav1.OwnerReference{
-						APIVersion: infrav1.GroupVersion.String(),
-						Kind:       instance.Kind,
-						Name:       instance.Name,
-						UID:        instance.UID,
-					}) {
-						ownerRefSet++
-					}
-				}
-				return ownerRefSet
-			}, timeout).Should(Equal(machineCount))
-		})
-	})
 })
-
-func createVsphereMachine(ctx context.Context, env *helpers.TestEnvironment, namespace, clusterName string) error {
-	vsphereMachine := &infrav1.VSphereMachine{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "test-vsp",
-			Namespace:    namespace,
-			Labels:       map[string]string{clusterv1.ClusterNameLabel: clusterName},
-		},
-		Spec: infrav1.VSphereMachineSpec{
-			VirtualMachineCloneSpec: infrav1.VirtualMachineCloneSpec{
-				Template: "ubuntu-k9s-1.19",
-				Network: infrav1.NetworkSpec{
-					Devices: []infrav1.NetworkDeviceSpec{
-						{NetworkName: "network-1", DHCP4: true},
-					},
-				},
-			},
-		},
-	}
-	return env.Create(ctx, vsphereMachine)
-}
 
 func TestClusterReconciler_ReconcileDeploymentZones(t *testing.T) {
 	server := "vcenter123.foo.com"
@@ -699,15 +461,18 @@ func TestClusterReconciler_ReconcileDeploymentZones(t *testing.T) {
 			tt := tt
 			t.Run(tt.name, func(t *testing.T) {
 				g := NewWithT(t)
-				controllerCtx := fake.NewControllerContext(fake.NewControllerManagerContext(tt.initObjs...))
-				ctx := fake.NewClusterContext(controllerCtx)
-				ctx.VSphereCluster.Spec.Server = server
+				controllerManagerContext := fake.NewControllerManagerContext(tt.initObjs...)
+				clusterCtx := fake.NewClusterContext(ctx, controllerManagerContext)
+				clusterCtx.VSphereCluster.Spec.Server = server
 
-				r := clusterReconciler{ControllerContext: controllerCtx}
-				reconciled, err := r.reconcileDeploymentZones(ctx)
+				r := clusterReconciler{
+					ControllerManagerContext: controllerManagerContext,
+					Client:                   controllerManagerContext.Client,
+				}
+				reconciled, err := r.reconcileDeploymentZones(ctx, clusterCtx)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(reconciled).To(Equal(tt.reconciled))
-				tt.assert(ctx.VSphereCluster)
+				tt.assert(clusterCtx.VSphereCluster)
 			})
 		}
 	})
@@ -768,16 +533,19 @@ func TestClusterReconciler_ReconcileDeploymentZones(t *testing.T) {
 			tt := tt
 			t.Run(tt.name, func(t *testing.T) {
 				g := NewWithT(t)
-				controllerCtx := fake.NewControllerContext(fake.NewControllerManagerContext(tt.initObjs...))
-				ctx := fake.NewClusterContext(controllerCtx)
-				ctx.VSphereCluster.Spec.Server = server
-				ctx.VSphereCluster.Spec.FailureDomainSelector = &metav1.LabelSelector{MatchLabels: map[string]string{}}
+				controllerManagerContext := fake.NewControllerManagerContext(tt.initObjs...)
+				clusterCtx := fake.NewClusterContext(ctx, controllerManagerContext)
+				clusterCtx.VSphereCluster.Spec.Server = server
+				clusterCtx.VSphereCluster.Spec.FailureDomainSelector = &metav1.LabelSelector{MatchLabels: map[string]string{}}
 
-				r := clusterReconciler{ControllerContext: controllerCtx}
-				reconciled, err := r.reconcileDeploymentZones(ctx)
+				r := clusterReconciler{
+					ControllerManagerContext: controllerManagerContext,
+					Client:                   controllerManagerContext.Client,
+				}
+				reconciled, err := r.reconcileDeploymentZones(ctx, clusterCtx)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(reconciled).To(Equal(tt.reconciled))
-				tt.assert(ctx.VSphereCluster)
+				tt.assert(clusterCtx.VSphereCluster)
 			})
 		}
 	})
@@ -801,15 +569,18 @@ func TestClusterReconciler_ReconcileDeploymentZones(t *testing.T) {
 		}
 
 		assertNumberOfZones := func(selector *metav1.LabelSelector, selectedZones int) {
-			controllerCtx := fake.NewControllerContext(fake.NewControllerManagerContext(zoneOne, zoneTwo, zoneThree))
-			ctx := fake.NewClusterContext(controllerCtx)
-			ctx.VSphereCluster.Spec.Server = server
-			ctx.VSphereCluster.Spec.FailureDomainSelector = selector
+			controllerManagerContext := fake.NewControllerManagerContext(zoneOne, zoneTwo, zoneThree)
+			clusterCtx := fake.NewClusterContext(ctx, controllerManagerContext)
+			clusterCtx.VSphereCluster.Spec.Server = server
+			clusterCtx.VSphereCluster.Spec.FailureDomainSelector = selector
 
-			r := clusterReconciler{ControllerContext: controllerCtx}
-			_, err := r.reconcileDeploymentZones(ctx)
+			r := clusterReconciler{
+				ControllerManagerContext: controllerManagerContext,
+				Client:                   controllerManagerContext.Client,
+			}
+			_, err := r.reconcileDeploymentZones(ctx, clusterCtx)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(ctx.VSphereCluster.Status.FailureDomains).To(HaveLen(selectedZones))
+			g.Expect(clusterCtx.VSphereCluster.Status.FailureDomains).To(HaveLen(selectedZones))
 		}
 
 		t.Run("with no zones matching labels", func(_ *testing.T) {
