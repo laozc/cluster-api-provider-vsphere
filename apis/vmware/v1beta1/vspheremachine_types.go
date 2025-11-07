@@ -63,6 +63,10 @@ type VSphereMachineSpec struct {
 	// +optional
 	StorageClass string `json:"storageClass,omitempty"`
 
+	// Crypto describes the desired encryption state of the VirtualMachine.
+	// +optional
+	Crypto *VirtualMachineCryptoSpec `json:"crypto,omitempty"`
+
 	// Volumes is the set of PVCs to be created and attached to the VSphereMachine
 	// +optional
 	Volumes []VSphereMachineVolume `json:"volumes,omitempty"`

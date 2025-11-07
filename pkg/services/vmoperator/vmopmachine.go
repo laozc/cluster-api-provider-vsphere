@@ -415,6 +415,13 @@ func (v *VmopMachineService) reconcileVMOperatorVM(ctx context.Context, supervis
 		if vmOperatorVM.Spec.StorageClass == "" {
 			vmOperatorVM.Spec.StorageClass = supervisorMachineCtx.VSphereMachine.Spec.StorageClass
 		}
+		if supervisorMachineCtx.VSphereMachine.Spec.Crypto != nil {
+			vmOperatorVM.Spec.Crypto = &vmoprv1.VirtualMachineCryptoSpec{}
+			vmOperatorVM.Spec.Crypto.EncryptionClassName = supervisorMachineCtx.VSphereMachine.Spec.Crypto.EncryptionClassName
+			vmOperatorVM.Spec.Crypto.UseDefaultKeyProvider = supervisorMachineCtx.VSphereMachine.Spec.Crypto.UseDefaultKeyProvider
+		} else {
+			vmOperatorVM.Spec.Crypto = nil
+		}
 		vmOperatorVM.Spec.PowerState = vmoprv1.VirtualMachinePowerStateOn
 		if supervisorMachineCtx.VSphereCluster.Status.ResourcePolicyName != "" {
 			if vmOperatorVM.Spec.Reserved == nil {
