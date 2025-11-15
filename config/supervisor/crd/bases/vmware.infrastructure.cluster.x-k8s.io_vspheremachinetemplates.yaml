@@ -404,6 +404,15 @@ spec:
                                 x-kubernetes-int-or-string: true
                               description: Capacity is the PVC capacity
                               type: object
+                            encryptionClassName:
+                              description: |-
+                                EncryptionClassName describes the name of the EncryptionClass resource
+                                used to encrypt this volume. Defaults to VSphereMachineSpec.Crypto.EncryptionClassName.
+
+                                Please note, this field is not required to encrypt the volume. If the
+                                underlying platform has a default key provider, the volume may still be fully
+                                or partially encrypted depending on the specified storage.
+                              type: string
                             name:
                               description: 'Name is suffix used to name this PVC as:
                                 VSphereMachine.Name + "-" + Name'

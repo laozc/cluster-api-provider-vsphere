@@ -46,6 +46,10 @@ import (
 	infrautilv1 "sigs.k8s.io/cluster-api-provider-vsphere/pkg/util"
 )
 
+const (
+	csiEncryptionClassAnnotationKey = "csi.vsphere.encryption-class"
+)
+
 // VmopMachineService reconciles VM Operator VM.
 type VmopMachineService struct {
 	Client                                client.Client
@@ -717,6 +721,10 @@ func (v *VmopMachineService) addVolumes(ctx context.Context, supervisorMachineCt
 		if volume.StorageClass == "" {
 			storageClassName = supervisorMachineCtx.VSphereMachine.Spec.StorageClass
 		}
+		encryptionClassName := volume.EncryptionClassName
+		if encryptionClassName == "" && supervisorMachineCtx.VSphereMachine.Spec.Crypto != nil {
+			encryptionClassName = supervisorMachineCtx.VSphereMachine.Spec.Crypto.EncryptionClassName
+		}
 
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
@@ -740,6 +748,7 @@ func (v *VmopMachineService) addVolumes(ctx context.Context, supervisorMachineCt
 		// have the zone annotation set.
 		zonal := len(supervisorMachineCtx.VSphereCluster.Status.FailureDomains) > 1
 
+		annotations := map[string]string{}
 		if zone := supervisorMachineCtx.VSphereMachine.Spec.FailureDomain; zonal && zone != nil {
 			topology := []map[string]string{
 				{kubeTopologyZoneLabelKey: *zone},
@@ -748,9 +757,15 @@ func (v *VmopMachineService) addVolumes(ctx context.Context, supervisorMachineCt
 			if err != nil {
 				return errors.Errorf("failed to marshal zone topology %q: %s", *zone, err)
 			}
-			pvc.Annotations = map[string]string{
-				"csi.vsphere.volume-requested-topology": string(b),
-			}
+			annotations["csi.vsphere.volume-requested-topology"] = string(b)
+		}
+
+		if encryptionClassName != "" {
+			annotations[csiEncryptionClassAnnotationKey] = encryptionClassName
+		}
+
+		if len(annotations) > 0 {
+			pvc.Annotations = annotations
 		}
 
 		if _, err := ctrlutil.CreateOrPatch(ctx, v.Client, pvc, func() error {

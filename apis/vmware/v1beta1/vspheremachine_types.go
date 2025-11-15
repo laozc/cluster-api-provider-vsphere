@@ -35,6 +35,14 @@ type VSphereMachineVolume struct {
 	// StorageClass defaults to VSphereMachineSpec.StorageClass
 	// +optional
 	StorageClass string `json:"storageClass,omitempty"`
+	// EncryptionClassName describes the name of the EncryptionClass resource
+	// used to encrypt this volume. Defaults to VSphereMachineSpec.Crypto.EncryptionClassName.
+	//
+	// Please note, this field is not required to encrypt the volume. If the
+	// underlying platform has a default key provider, the volume may still be fully
+	// or partially encrypted depending on the specified storage.
+	// +optional
+	EncryptionClassName string `json:"encryptionClassName,omitempty"`
 }
 
 // VSphereMachineSpec defines the desired state of VSphereMachine.
